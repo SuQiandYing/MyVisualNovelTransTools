@@ -78,6 +78,7 @@ def rebuild_relocate_command(
     edited_encoding: str,
     encrypt_output: bool = False,
     replace_plain_with_encrypted: bool = False,
+    audit_log: bool = False,
 ):
     return _rebuild_relocate_command(
         dump_dir,
@@ -85,6 +86,7 @@ def rebuild_relocate_command(
         edited_encoding=edited_encoding,
         encrypt_output=encrypt_output,
         replace_plain_with_encrypted=replace_plain_with_encrypted,
+        audit_log=audit_log,
     )
 
 
@@ -99,6 +101,7 @@ def rebuild_with_pointer_table_command(
     replace_plain_with_encrypted: bool = False,
     start_idx: int = 0,
     script_scan_start: int | None = None,
+    audit_log: bool = False,
 ):
     return _rebuild_with_pointer_table_command(
         dump_dir,
@@ -110,6 +113,7 @@ def rebuild_with_pointer_table_command(
         replace_plain_with_encrypted=replace_plain_with_encrypted,
         start_idx=start_idx,
         script_scan_start=script_scan_start,
+        audit_log=audit_log,
     )
 
 
@@ -122,6 +126,7 @@ def rebuild_auto_command(
     edited_encoding: str,
     encrypt_output: bool = False,
     replace_plain_with_encrypted: bool = False,
+    audit_log: bool = False,
 ):
     return _rebuild_auto_command(
         dump_dir,
@@ -131,6 +136,7 @@ def rebuild_auto_command(
         edited_encoding=edited_encoding,
         encrypt_output=encrypt_output,
         replace_plain_with_encrypted=replace_plain_with_encrypted,
+        audit_log=audit_log,
     )
 
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 
@@ -81,7 +80,7 @@ class GuiActionsMixin:
             except ValueError:
                 script_scan_start = None
 
-        return "rebuild_pointer_table", core_v1.rebuild_with_pointer_table_command(
+        return "rebuild_verified_references", core_v1.rebuild_with_pointer_table_command(
             dump_dir,
             script_path,
             text_path,
@@ -110,7 +109,6 @@ class GuiActionsMixin:
             return
 
         def work() -> None:
-            self._log(">>> 步骤 1: 开始反汇编脚本...")
             manifest = core_v1.dump_command(
                 paths["script"],
                 paths["text"],
@@ -119,7 +117,6 @@ class GuiActionsMixin:
             )
             self._log(f"反汇编完成，共 {manifest.get('text_entry_count', 0)} 条文本。")
 
-            self._log(">>> 步骤 2: 自动搜索脚本指针锚点...")
             try:
                 auto_idx, script_offset = core_v1.auto_find_anchor_idx(
                     paths["script"],
@@ -128,11 +125,9 @@ class GuiActionsMixin:
                 )
                 self.root.after(0, lambda: self.anchor_idx.set(str(auto_idx)))
                 self.root.after(0, lambda: self.script_offset.set(hex(script_offset)))
-                self._log(f"分析成功，找到锚点 idx={auto_idx}, 地址={hex(script_offset)}")
+                self._log(f"定位参考：idx={auto_idx}，地址={hex(script_offset)}。")
             except Exception as exc:
-                self._log(f"自动分析失败: {exc}")
-
-            self._log("反汇编与分析已完成，可继续导出译文或直接回封。")
+                self._log(f"定位参考未找到：{exc}")
 
         self._run_background("反汇编 + 分析", work)
 
@@ -153,7 +148,7 @@ class GuiActionsMixin:
                 idx_start=idx_start,
                 idx_end=idx_end,
             )
-            self._log_json("export", report)
+            self._log_report("export", report)
 
         self._run_background("导出译文", work)
 
@@ -168,7 +163,7 @@ class GuiActionsMixin:
                 Path(self.scenario_dir.get()),
                 file_encoding=self.translation_file_encoding.get(),
             )
-            self._log_json("export_scenarios", report)
+            self._log_report("export_scenarios", report)
 
         self._run_background("按 scenario 导出", work)
 
@@ -180,6 +175,7 @@ class GuiActionsMixin:
 
         def work() -> None:
             import_report = core_v1.import_scenario_split_command(paths["dump"], paths["scenario"])
+            self._log_report("import_scenarios", import_report)
             rebuild_label, rebuild_report = self._run_selected_rebuild_backend(
                 paths["dump"],
                 paths["script"],
@@ -189,8 +185,7 @@ class GuiActionsMixin:
                 encrypt_output=encrypt_output,
                 replace_plain_with_encrypted=replace_plain_with_encrypted,
             )
-            self._log_json("import_scenarios", import_report)
-            self._log_json(rebuild_label, rebuild_report)
+            self._log_report(rebuild_label, rebuild_report)
 
         self._run_background("scenario 导入 + 变长回封", work)
 
@@ -211,6 +206,7 @@ class GuiActionsMixin:
                 idx_start=idx_start,
                 idx_end=idx_end,
             )
+            self._log_report("import", import_report)
             rebuild_label, rebuild_report = self._run_selected_rebuild_backend(
                 paths["dump"],
                 paths["script"],
@@ -220,26 +216,27 @@ class GuiActionsMixin:
                 encrypt_output=encrypt_output,
                 replace_plain_with_encrypted=replace_plain_with_encrypted,
             )
-            self._log_json("import", import_report)
-            self._log_json(rebuild_label, rebuild_report)
+            self._log_report(rebuild_label, rebuild_report)
 
         self._run_background("导入 + 变长回封", work)
 
     def _run_background(self, title: str, worker) -> None:
         if self._busy:
             return
+        self._set_busy(True, title)
+        self._log(f"{title}：开始。")
 
         def task() -> None:
-            self.root.after(0, lambda: self._set_busy(True, title))
+            status = f"{title} 完成"
             try:
                 worker()
-                self.root.after(0, lambda: self._set_status(f"{title} 完成"))
             except Exception as exc:
-                self.root.after(0, lambda: self._log(f"[ERROR] {title}: {exc}"))
-                self.root.after(0, lambda: self._show_error("执行失败", f"{title} 失败:\n{exc}"))
-                self.root.after(0, lambda: self._set_status(f"{title} 失败"))
+                error = f"{type(exc).__name__}: {exc}"
+                status = f"{title} 失败"
+                self._log(f"{status}：{error}")
+                self.root.after(0, lambda: self._show_error("执行失败", f"{title} 失败:\n{error}"))
             finally:
-                self.root.after(0, lambda: self._set_busy(False, "就绪"))
+                self.root.after(0, lambda: self._set_busy(False, status))
 
         import threading
 
@@ -249,5 +246,28 @@ class GuiActionsMixin:
         stamp = datetime.now().strftime("%H:%M:%S")
         self.root.after(0, lambda: self._append_log(f"[{stamp}] {message}\n"))
 
-    def _log_json(self, label: str, payload: dict) -> None:
-        self._log(f"{label}: {json.dumps(payload, ensure_ascii=False)}")
+    def _log_report(self, label: str, payload: dict) -> None:
+        if label == "export":
+            message = f"译文已导出：{payload['rows']:,} 条，编码 {payload['file_encoding']}。"
+        elif label == "export_scenarios":
+            message = f"分场景导出完成：{payload['files_written']:,} 个文件。"
+        elif label == "import":
+            message = f"译文已导入：{payload['imported_rows']:,} 条，其中 {payload['changed_rows']:,} 条与原文不同。"
+        elif label == "import_scenarios":
+            message = f"分场景导入完成：{payload['files']:,} 个文件，{payload['updated_idxs']:,} 条文本。"
+        elif label.startswith("rebuild"):
+            if payload.get("encrypted_replaces_plain"):
+                output = "仅输出加密"
+            elif payload.get("text_encrypted_path") or payload.get("text_encrypted"):
+                output = "同时输出明文和加密"
+            else:
+                output = "仅输出明文"
+            message = (
+                f"回封完成：修改 {payload['changed_rows']:,} 条文本；"
+                f"更新 {payload['rewritten_script_words']:,} 个引用"
+                f"（核对 {payload['verified_reference_sites']:,} 个）；"
+                f"数据校验通过；{output}。"
+            )
+        else:
+            message = f"{label} 完成。"
+        self._log(message)

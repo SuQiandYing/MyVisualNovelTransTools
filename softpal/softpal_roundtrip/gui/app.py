@@ -12,7 +12,7 @@ except ImportError:
 
 from .actions import GuiActionsMixin
 from .config import load_config, reset_config, save_config
-from .constants import COMMON_CODECS, OUTPUT_MODE_VALUES
+from .constants import COMMON_CODECS, MAX_LOG_LINES, OUTPUT_MODE_VALUES
 
 
 class SoftpalToolGUI(GuiActionsMixin):
@@ -470,8 +470,8 @@ class SoftpalToolGUI(GuiActionsMixin):
             "回封输出：可选“同时输出明文和加密”“仅输出明文”“仅输出加密”。\n"
             "起始 idx：只导出/导入某段文本时的起始索引，留空表示不限制。\n"
             "结束 idx：只导出/导入某段文本时的结束索引，留空表示不限制。\n"
-            "脚本地址：回封时的脚本扫描起始地址，通常自动定位成功后会自动填入。\n"
-            "锚点 idx：回封时使用的起始锚点索引，通常自动定位成功后会自动填入。\n\n"
+            "脚本地址：自动定位得到的参考位置，回封会更新整份脚本的文本引用。\n"
+            "锚点 idx：自动定位得到的参考文本编号，不限制导入或回封范围。\n\n"
             "补充说明\n\n"
             "自动识别项目文件：按项目目录自动补全常用路径。\n"
             "重置配置：清空已保存配置并恢复默认值。\n"
@@ -615,6 +615,9 @@ class SoftpalToolGUI(GuiActionsMixin):
 
     def _append_log(self, text: str) -> None:
         self.log_text.insert("end", text)
+        lines = int(self.log_text.index("end-1c").split(".")[0]) - 1
+        if lines > MAX_LOG_LINES:
+            self.log_text.delete("1.0", f"{lines - MAX_LOG_LINES + 1}.0")
         self.log_text.see("end")
 
     def _save_config(self, *_args) -> None:

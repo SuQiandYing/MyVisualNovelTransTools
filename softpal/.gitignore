@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+gui_config.json
+reports/
+disasm_out/
+scenario_txt/
+rebuild_*/
+translate_dump.txt
+SCRIPT.SRC
+TEXT.DAT
+*.en
+*.bak
+.rebuild-*/

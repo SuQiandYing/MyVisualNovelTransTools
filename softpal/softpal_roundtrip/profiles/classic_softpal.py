@@ -24,10 +24,18 @@ DEBUG_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 PLACEHOLDER_NAME_RE = re.compile(r"^[?？]+$")
+NAME_DISALLOWED_CHARS = frozenset("<>[]{}()（）「」『』【】《》。、：:；;…♪")
 
 
 class ClassicSoftPalProfile(AbstractGameProfile):
     name = "classic-softpal"
+
+    # SCRIPT.SRC: all 1,150 text calls use these four argument slots.
+    # See vm_analysis.md; a line/flag value can also equal a TEXT.DAT offset.
+    _message_argument_roles = {
+        0x00020002: ("flags", "text", "name", "line"),
+        0x0002000F: ("flags", "text", "name", "line"),
+    }
 
     _message_call_ids = {
         0x00020002,
@@ -181,17 +189,16 @@ class ClassicSoftPalProfile(AbstractGameProfile):
         return label_offsets
 
     def is_name_text(self, text: str, context: NameTextContext) -> bool:
-        if not text or len(text) > 24:
+        if not text or len(text) > 24 or not context.message_text:
             return False
         if PLACEHOLDER_NAME_RE.fullmatch(text):
-            return len(context.message_text) > 1
+            return True
         trimmed = text.rstrip("!?！？")
         if not trimmed:
             return False
-        disallowed = "\r\n<>[]{}()<>「」『』【】。 、 "
-        if any(ch in trimmed for ch in disallowed):
+        if any(ch.isspace() or ch in NAME_DISALLOWED_CHARS for ch in trimmed):
             return False
-        return len(context.message_text) > 1
+        return any(ch.isalpha() for ch in trimmed)
 
     def is_choice_text(self, text: str, context: TextClassificationContext) -> bool:
         stripped = text.strip()
@@ -302,6 +309,61 @@ class ClassicSoftPalProfile(AbstractGameProfile):
             }
         }
 
+    def _resolve_message_entries(
+        self,
+        params: Mapping[int, int],
+        text_map: Mapping[int, TextEntry],
+        *,
+        call_id: int,
+        call_offset: int,
+        ignored_ordinals: tuple[int, ...] = (),
+    ) -> tuple[TextEntry | None, TextEntry | None]:
+        """Return (body, speaker), using a declared layout before text heuristics."""
+        roles = self._message_argument_roles.get(call_id)
+        if roles is not None and set(params) == set(range(len(roles))):
+            values = {role: params[ordinal] for ordinal, role in enumerate(roles)}
+            text_entry = text_map.get(values["text"])
+            if text_entry is None:
+                return None, None
+            name_offset = values["name"]
+            name_entry = (
+                None
+                if name_offset == self.get_no_name_sentinel()
+                else text_map.get(name_offset)
+            )
+            return text_entry, name_entry
+
+        # Other layouts keep the existing text-reference path, but must have
+        # one unambiguous pair. Never compare a candidate with itself or let
+        # the first/last matching text decide which role it occupies.
+        candidates: dict[int, TextEntry] = {}
+        for ordinal, value in sorted(params.items()):
+            if ordinal not in ignored_ordinals and value in text_map:
+                candidates[value] = text_map[value]
+        entries = list(candidates.values())
+        if not entries:
+            return None, None
+        if len(entries) == 1:
+            return entries[0], None
+        if len(entries) == 2:
+            left, right = entries
+            left_is_name = self.is_name_text(
+                left.original_text,
+                NameTextContext(left, right, left.original_text, right.original_text),
+            )
+            right_is_name = self.is_name_text(
+                right.original_text,
+                NameTextContext(right, left, right.original_text, left.original_text),
+            )
+            if left_is_name != right_is_name:
+                return (right, left) if left_is_name else (left, right)
+
+        candidate_summary = ", ".join(f"idx={entry.idx} {entry.original_text!r}" for entry in entries)
+        raise ValueError(
+            f"无法确定消息调用的人名与正文：call=0x{call_offset:08X} "
+            f"id=0x{call_id:08X}，候选为 {candidate_summary}；请为此调用补充参数槽位定义。"
+        )
+
     def _extract_message_events_push_calls(
         self,
         words: Sequence[int],
@@ -330,38 +392,14 @@ class ClassicSoftPalProfile(AbstractGameProfile):
             if not immediates:
                 continue
 
-            text_candidates: list[tuple[int, TextEntry]] = []
-            for val in immediates:
-                if val in text_map:
-                    text_candidates.append((val, text_map[val]))
-            
-            if not text_candidates:
-                continue
-
-            name_entry: TextEntry | None = None
-            text_entry: TextEntry | None = None
-            
-            if len(text_candidates) >= 2:
-                for _val, entry in text_candidates:
-                    ctx = NameTextContext(
-                        candidate_entry=entry,
-                        message_entry=text_candidates[-1][1], 
-                        candidate_text=entry.original_text,
-                        message_text=text_candidates[-1][1].original_text,
-                    )
-                    if name_entry is None and self.is_name_text(entry.original_text, ctx):
-                        name_entry = entry
-                    elif text_entry is None:
-                        text_entry = entry
-            
+            text_entry, name_entry = self._resolve_message_entries(
+                dict(enumerate(immediates)),
+                text_map,
+                call_id=call_id,
+                call_offset=i * 4,
+            )
             if text_entry is None:
-                text_entry = text_candidates[-1][1]
-            
-            if name_entry is None and len(text_candidates) >= 2:
-                for _val, entry in text_candidates:
-                    if entry != text_entry:
-                        name_entry = entry
-                        break
+                continue
 
             kind = "spoken" if name_entry is not None else "narration"
             
@@ -400,12 +438,7 @@ class ClassicSoftPalProfile(AbstractGameProfile):
                 continue
             i = max(end_i, start_i + 1)
             
-            text_candidates: list[tuple[int, TextEntry, int]] = []
-            for ordinal, value in sorted(params.items()):
-                if value in text_map:
-                    text_candidates.append((value, text_map[value], ordinal))
-            
-            if not text_candidates:
+            if not any(value in text_map for value in params.values()):
                 continue
 
             call_before = self._find_adjacent_message_call_before(words, start_i, call_opcode=call_opcode)
@@ -414,30 +447,15 @@ class ClassicSoftPalProfile(AbstractGameProfile):
             if call_i is None:
                 continue
 
-            name_entry: TextEntry | None = None
-            text_entry: TextEntry | None = None
-
-            if len(text_candidates) >= 2:
-                for _val, entry, _ordinal in text_candidates:
-                    ctx = NameTextContext(
-                        candidate_entry=entry,
-                        message_entry=text_candidates[-1][1],
-                        candidate_text=entry.original_text,
-                        message_text=text_candidates[-1][1].original_text,
-                    )
-                    if name_entry is None and self.is_name_text(entry.original_text, ctx):
-                        name_entry = entry
-                    elif text_entry is None:
-                        text_entry = entry
-            
+            text_entry, name_entry = self._resolve_message_entries(
+                params,
+                text_map,
+                call_id=words[call_i + 1],
+                call_offset=call_i * 4,
+                ignored_ordinals=(3,),
+            )
             if text_entry is None:
-                text_entry = text_candidates[-1][1]
-            
-            if name_entry is None and len(text_candidates) >= 2:
-                for _val, entry, _ordinal in text_candidates:
-                    if entry != text_entry:
-                        name_entry = entry
-                        break
+                continue
 
             kind = "spoken" if name_entry is not None else "narration"
             

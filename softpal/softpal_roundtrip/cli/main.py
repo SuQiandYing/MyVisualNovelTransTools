@@ -65,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild_relocate.add_argument("--edited-encoding", default="cp932")
     rebuild_relocate.add_argument("--encrypt-output", action="store_true")
     rebuild_relocate.add_argument("--replace-plain-with-encrypted", action="store_true")
+    rebuild_relocate.add_argument("--audit-log", action="store_true", help="Write detailed reference and relocation logs")
 
     rebuild_pointer_table = subparsers.add_parser("rebuild-pointer-table")
     rebuild_pointer_table.add_argument("--dump", default=Path("disasm_out"), type=Path)
@@ -74,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild_pointer_table.add_argument("--edited-encoding", default="cp932")
     rebuild_pointer_table.add_argument("--encrypt-output", action="store_true")
     rebuild_pointer_table.add_argument("--replace-plain-with-encrypted", action="store_true")
+    rebuild_pointer_table.add_argument("--audit-log", action="store_true", help="Write detailed reference and relocation logs")
 
     rebuild_auto = subparsers.add_parser("rebuild-auto")
     rebuild_auto.add_argument("--dump", default=Path("disasm_out"), type=Path)
@@ -83,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild_auto.add_argument("--edited-encoding", default="cp932")
     rebuild_auto.add_argument("--encrypt-output", action="store_true")
     rebuild_auto.add_argument("--replace-plain-with-encrypted", action="store_true")
+    rebuild_auto.add_argument("--audit-log", action="store_true", help="Write detailed logs when a relocation strategy is selected")
 
     export_translation = subparsers.add_parser("export-translation")
     export_translation.add_argument("--dump", default=Path("disasm_out"), type=Path)
@@ -133,13 +136,13 @@ def main() -> None:
         print(json.dumps(rebuild_inplace_command(args.dump, args.out, edited_encoding=args.edited_encoding, encrypt_output=args.encrypt_output, replace_plain_with_encrypted=args.replace_plain_with_encrypted), ensure_ascii=False, indent=2))
         return
     if args.command == "rebuild-relocate":
-        print(json.dumps(rebuild_relocate_command(args.dump, args.out, edited_encoding=args.edited_encoding, encrypt_output=args.encrypt_output, replace_plain_with_encrypted=args.replace_plain_with_encrypted), ensure_ascii=False, indent=2))
+        print(json.dumps(rebuild_relocate_command(args.dump, args.out, edited_encoding=args.edited_encoding, encrypt_output=args.encrypt_output, replace_plain_with_encrypted=args.replace_plain_with_encrypted, audit_log=args.audit_log), ensure_ascii=False, indent=2))
         return
     if args.command == "rebuild-pointer-table":
-        print(json.dumps(rebuild_with_pointer_table_command(args.dump, args.script, args.text, args.out, edited_encoding=args.edited_encoding, encrypt_output=args.encrypt_output, replace_plain_with_encrypted=args.replace_plain_with_encrypted), ensure_ascii=False, indent=2))
+        print(json.dumps(rebuild_with_pointer_table_command(args.dump, args.script, args.text, args.out, edited_encoding=args.edited_encoding, encrypt_output=args.encrypt_output, replace_plain_with_encrypted=args.replace_plain_with_encrypted, audit_log=args.audit_log), ensure_ascii=False, indent=2))
         return
     if args.command == "rebuild-auto":
-        print(json.dumps(rebuild_auto_command(args.dump, args.script, args.text, args.out, edited_encoding=args.edited_encoding, encrypt_output=args.encrypt_output, replace_plain_with_encrypted=args.replace_plain_with_encrypted), ensure_ascii=False, indent=2))
+        print(json.dumps(rebuild_auto_command(args.dump, args.script, args.text, args.out, edited_encoding=args.edited_encoding, encrypt_output=args.encrypt_output, replace_plain_with_encrypted=args.replace_plain_with_encrypted, audit_log=args.audit_log), ensure_ascii=False, indent=2))
         return
     if args.command == "export-translation":
         print(json.dumps(export_translation_command(args.dump, args.out, file_encoding=args.file_encoding, idx_start=args.idx_start, idx_end=args.idx_end), ensure_ascii=False, indent=2))
