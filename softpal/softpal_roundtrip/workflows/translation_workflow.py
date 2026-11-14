@@ -17,6 +17,7 @@ from ..io.translation_workflow_support import (
     build_translation_header,
     export_tag_for_row,
     normalize_translation_tag,
+    translation_tag_matches_row,
 )
 
 
@@ -96,6 +97,7 @@ def import_translation_command(
 
     seen: set[int] = set()
     changed = 0
+    legacy_tag_rows = 0
     for idx, tag, original_line, translated_line in parsed_pairs:
         row = text_by_idx.get(idx)
         if row is None:
@@ -105,8 +107,10 @@ def import_translation_command(
                 f"idx={idx} 不在当前导入范围内：{idx_start if idx_start is not None else '-inf'} .. {idx_end if idx_end is not None else '+inf'}"
             )
         expected_tag = export_tag_for_row(export_row_by_idx[idx])
-        if tag != expected_tag:
+        if not translation_tag_matches_row(tag, export_row_by_idx[idx]):
             raise ValueError(f"idx={idx} 的标签不匹配：文件里是 {tag!r}，当前 dump 期望 {expected_tag!r}")
+        if tag != expected_tag:
+            legacy_tag_rows += 1
         expected = row["original_text"]
         if original_line != expected:
             raise ValueError(
@@ -135,6 +139,7 @@ def import_translation_command(
         "total_rows": len(text_rows),
         "changed_rows": changed,
         "unchanged_rows": len(expected_rows) - changed,
+        "legacy_tag_rows": legacy_tag_rows,
     }
     json_dump(dump_dir / "import_translation_report.json", report)
     return report

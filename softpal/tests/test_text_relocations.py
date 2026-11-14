@@ -138,6 +138,40 @@ class TextRelocationTests(unittest.TestCase):
                 self.assertEqual(self.value(script, self.message_sites[1]), text.entries[3].entry_offset)
                 self.assertEqual(self.value(script, self.repeat_site), text.entries[2].entry_offset)
 
+    def test_extended_message_arguments_relocate_texts_and_preserve_numbers(self) -> None:
+        message_sites = []
+        for call_id in (0x00020012, 0x00020013, 0x00020014):
+            arguments = [self.entry_offsets[3], self.entry_offsets[2], self.entry_offsets[2]]
+            if call_id != 0x00020014:
+                arguments.insert(0, self.entry_offsets[2])
+            sites = self.append_call(arguments, call_id)
+            message_sites.append((sites[-3], sites[-2], [sites[-1]] + (sites[:1] if len(sites) == 4 else [])))
+        self.redump_script()
+        for translation in ("Ｈ劇情１", "Ｈ劇情第一章"):
+            self.rows[1]["text"] = translation
+            for backend in ("gui", "cli"):
+                with self.subTest(translation=translation, backend=backend):
+                    script, text, _ = self.rebuild(backend=backend)
+                    for body_site, name_site, numeric_sites in message_sites:
+                        self.assertEqual(self.value(script, body_site), text.entries[3].entry_offset)
+                        self.assertEqual(self.value(script, name_site), text.entries[2].entry_offset)
+                        self.assertEqual(self.displayed(text.normalized_data, self.value(script, body_site)), "本文")
+                        self.assertEqual(self.displayed(text.normalized_data, self.value(script, name_site)), self.original_texts[2])
+                        for site in numeric_sites:
+                            self.assertEqual(self.value(script, site), self.entry_offsets[2])
+
+    def test_chapter_title_reference_relocates_and_neighboring_numeric_slot_stays(self) -> None:
+        title_site, = self.append_call([self.entry_offsets[2]], 0x000A0015)
+        numeric_site, = self.append_call([self.entry_offsets[2]], 0x000A000C)
+        self.redump_script()
+        self.rows[1]["text"] = "Ｈ劇情第一章"
+        for backend in ("gui", "cli"):
+            with self.subTest(backend=backend):
+                script, text, _ = self.rebuild(backend=backend)
+                self.assertEqual(self.value(script, title_site), text.entries[2].entry_offset)
+                self.assertEqual(self.displayed(text.normalized_data, self.value(script, title_site)), self.original_texts[2])
+                self.assertEqual(self.value(script, numeric_site), self.entry_offsets[2])
+
     def test_auto_anchor_uses_parsed_entry_start_and_structural_reference(self) -> None:
         idx, site = auto_find_anchor_idx(self.text_data, self.script_data)
         self.assertEqual(idx, 0)

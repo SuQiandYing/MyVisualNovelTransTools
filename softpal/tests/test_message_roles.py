@@ -91,6 +91,34 @@ class MessageRoleTests(unittest.TestCase):
                 self.assertEqual((event.text_idx, event.name_idx), (10, expected_name))
                 self.assertEqual(event.line_id, arguments[3])
 
+    def test_extended_message_calls_ignore_numeric_text_address_collisions(self) -> None:
+        body = self.entry(10, 0x100, "うん")
+        name = self.entry(11, 0x200, "エマ")
+        collision = self.entry(112, 0x708, "shortcut")
+        for call_id, arguments in (
+            (0x00020012, [0x708, 0x100, 0x200, 0x708]),
+            (0x00020013, [0x708, 0x100, 0x200, 0x708]),
+            (0x00020014, [0x100, 0x200, 0x708]),
+        ):
+            with self.subTest(call_id=call_id):
+                event, = self.extract(self.push_call(arguments, call_id), [body, name, collision])
+                self.assertEqual((event.text_idx, event.name_idx, event.line_id), (10, 11, 0x708))
+
+    def test_extended_message_param_blocks_use_each_layouts_line_slot(self) -> None:
+        body = self.entry(10, 0x100, "うん")
+        name = self.entry(11, 0x200, "エマ")
+        collision = self.entry(112, 0x708, "shortcut")
+        for call_id, arguments in (
+            (0x00020012, {2: 0x200, 0: 0x708, 3: 0x708, 1: 0x100}),
+            (0x00020013, {2: 0x200, 0: 0x708, 3: 0x708, 1: 0x100}),
+            (0x00020014, {1: 0x200, 2: 0x708, 0: 0x100}),
+        ):
+            for before in (False, True):
+                with self.subTest(call_id=call_id, before=before):
+                    words = self.param_call(arguments, before=before, call_id=call_id)
+                    event, = self.extract(words, [body, name, collision])
+                    self.assertEqual((event.text_idx, event.name_idx, event.line_id), (10, 11, 0x708))
+
     def test_missing_message_slot_is_not_replaced_by_numeric_collision(self) -> None:
         collision = self.entry(12, 0x300, "背景")
         events = self.extract(self.push_call([0, 0x999, self.profile.get_no_name_sentinel(), 0x300]), [collision])
@@ -183,6 +211,30 @@ class MessageRoleTests(unittest.TestCase):
                 expected_name = None if name_offset == self.profile.get_no_name_sentinel() else name_offset
                 self.assertEqual(event.name_offset, expected_name)
                 self.assertEqual(event.line_id, script.words[call_word - 1])
+
+    def test_extended_corpus_message_roles_match_all_declared_slots(self) -> None:
+        source_directory = os.environ.get("SOFTPAL_TEST_VARIANT_CORPUS")
+        if not source_directory:
+            self.skipTest("Set SOFTPAL_TEST_VARIANT_CORPUS to run the optional variant check")
+        source_root = Path(source_directory)
+        script = ParsedScript.from_bytes((source_root / "SCRIPT.SRC").read_bytes())
+        text_map = build_text_offset_map(load_text_dat_auto(source_root / "TEXT.DAT", self.profile).entries)
+        events = self.profile.extract_message_events(script, text_map)
+        message_calls = {0x00020002, 0x0002000F, 0x00020012, 0x00020013, 0x00020014}
+        selected = [event for event in events if event.call_id in message_calls]
+        self.assertEqual(len(selected), 19491)
+        for call_id in (0x00020012, 0x00020013, 0x00020014):
+            self.assertEqual(sum(event.call_id == call_id for event in selected), 16)
+        for event in selected:
+            with self.subTest(call_offset=f"0x{event.call_offset:08X}"):
+                call_word = event.call_offset // 4
+                self.assertEqual(event.text_offset, script.words[call_word - 5])
+                name_offset = script.words[call_word - 3]
+                expected_name = None if name_offset == self.profile.get_no_name_sentinel() else name_offset
+                self.assertEqual(event.name_offset, expected_name)
+                self.assertEqual(event.line_id, script.words[call_word - 1])
+        reported_event, = [event for event in selected if event.call_offset == 0x001BA26C]
+        self.assertEqual((reported_event.text_idx, reported_event.name_idx), (18498, 18499))
 
 
 if __name__ == "__main__":

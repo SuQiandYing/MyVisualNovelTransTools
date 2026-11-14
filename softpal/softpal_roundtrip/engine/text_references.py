@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
+from ..core.message_layouts import MESSAGE_ARGUMENT_ROLES
 from ..core.models import TextEntry
 from .script_parser import ParsedScript
 
@@ -23,9 +24,12 @@ _PURE_REGISTER_OPS = {0x10000 + op for op in _BINARY_OPS} | {0x10014, 0x1001D}
 # indexes, coordinates, flags or line numbers. Partial PUSH runs are common:
 # the compiler interleaves register assignments with argument preparation.
 _NATIVE_TEXT_DEPTHS = {
-    0x00020002: (3, 2),
-    0x0002000F: (3, 2),
+    call_id: tuple(len(roles) - ordinal for ordinal, role in enumerate(roles) if role in {"text", "name"})
+    for call_id, roles in MESSAGE_ARGUMENT_ROLES.items()
+}
+_NATIVE_TEXT_DEPTHS.update({
     0x00060002: (1,),
+    0x000A0015: (1,),
     0x000F0001: (1,),
     0x000F0002: (1,),
     0x000F0004: (1,),
@@ -36,7 +40,7 @@ _NATIVE_TEXT_DEPTHS = {
     0x0012003B: (2,),
     0x0012005A: (1,),
     0x0012005C: (1,),
-}
+})
 
 
 @dataclass(frozen=True, slots=True)

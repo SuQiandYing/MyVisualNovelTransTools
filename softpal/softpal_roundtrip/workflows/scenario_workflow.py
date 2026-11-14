@@ -11,6 +11,7 @@ from ..io.translation_workflow_support import (
     build_translation_header,
     export_tag_for_row,
     normalize_translation_tag,
+    translation_tag_matches_row,
 )
 
 
@@ -20,6 +21,10 @@ SCENARIO_SPLIT_MARKER_LINE_RE = re.compile(r"^\s*(?:@@scenario_split@@\s*)?(?P<n
 SCENARIO_OPCODE_CONFIG_RE = re.compile(r"^(?:sce\d+_\d+|pro_\d+_\d+|[a-z]+_\d+(?:_\d+)+)$", re.IGNORECASE)
 SCENARIO_OPCODE_UI_RE = re.compile(r"^(?:\d+[_-].+|.+\d+)$")
 ASCII_CONFIG_RE = re.compile(r"^(?:DEF_|sys_|initialize$|[A-Za-z0-9_.%+-]+$)", re.IGNORECASE)
+SCENARIO_TRANSLATION_TAGS = frozenset({
+    "name", "msg", "choice", "ui", "display", "system", "title",
+    "chapter_title", "route_title", "replay_title", "label_text",
+})
 
 
 def looks_like_scenario_text(text: str) -> bool:
@@ -237,11 +242,15 @@ def export_scenario_split_command(dump_dir: Path, out_dir: Path, *, file_encodin
     out_dir.mkdir(parents=True, exist_ok=True)
     files: list[dict] = []
     used_names: set[str] = set()
+    excluded_internal_rows = 0
     for i, scenario in enumerate(scenarios):
         start_idx = int(scenario["start_idx"])
         next_start_idx = scenario_indexes[i + 1] if i + 1 < len(scenario_indexes) else None
         range_start_idx = pre_first_start_idx if i == 0 and pre_first_start_idx is not None and pre_first_start_idx < start_idx else start_idx
-        scenario_rows = [row for row in ordered_rows if int(row["idx"]) >= range_start_idx and (next_start_idx is None or int(row["idx"]) < next_start_idx)]
+        range_rows = [row for row in ordered_rows if int(row["idx"]) >= range_start_idx and (next_start_idx is None or int(row["idx"]) < next_start_idx)]
+        scenario_rows = [row for row in range_rows if int(row["idx"]) == start_idx or export_tag_for_row(row) in SCENARIO_TRANSLATION_TAGS]
+        excluded_count = len(range_rows) - len(scenario_rows)
+        excluded_internal_rows += excluded_count
         filename = unique_split_filename(scenario_filename(str(scenario["name"])), used_names) + ".txt"
         path = out_dir / filename
         lines = build_translation_header(range_start_idx, None if next_start_idx is None else next_start_idx - 1) + build_scenario_split_marker_lines(scenario) + build_translate_blocks(scenario_rows, message_rows)
@@ -252,6 +261,7 @@ def export_scenario_split_command(dump_dir: Path, out_dir: Path, *, file_encodin
             "scenario_role": "scenario_boundary",
             "path": str(path),
             "row_count": len(scenario_rows),
+            "excluded_internal_rows": excluded_count,
             "start_idx": range_start_idx,
             "boundary_idx": start_idx,
             "end_idx": None if next_start_idx is None else next_start_idx - 1,
@@ -263,6 +273,7 @@ def export_scenario_split_command(dump_dir: Path, out_dir: Path, *, file_encodin
         "include_pre_first_rows": include_pre_first,
         "scenario_count": len(scenarios),
         "files_written": len(files),
+        "excluded_internal_rows": excluded_internal_rows,
         "sample_files": files[:20],
     }
     json_dump(out_dir / "scenario_split_report.json", report)
@@ -277,6 +288,7 @@ def import_scenario_split_command(dump_dir: Path, scenario_dir: Path) -> dict:
     text_by_idx = {int(row["idx"]): row for row in text_rows}
     updated_idxs: set[int] = set()
     file_reports: list[dict] = []
+    legacy_tag_rows = 0
     for path in sorted(scenario_dir.glob("*.txt")):
         lines = read_text_auto(path).splitlines()
         parsed_pairs: list[tuple[int, str, str, str]] = []
@@ -313,13 +325,16 @@ def import_scenario_split_command(dump_dir: Path, scenario_dir: Path) -> dict:
             parsed_pairs.append((idx1, tag1, m1.group("text"), m2.group("text")))
             i += 2
         changed = 0
+        file_legacy_tag_rows = 0
         for idx, tag, original_line, translated_line in parsed_pairs:
             row = text_by_idx.get(idx)
             if row is None:
                 raise ValueError(f"{path} 包含未知 idx={idx}")
             expected_tag = export_tag_for_row(export_row_by_idx[idx])
-            if tag != expected_tag:
+            if not translation_tag_matches_row(tag, export_row_by_idx[idx]):
                 raise ValueError(f"{path} idx={idx} 的标签不匹配：文件里是 {tag!r}，当前 dump 期望 {expected_tag!r}")
+            if tag != expected_tag:
+                file_legacy_tag_rows += 1
             expected = row["original_text"]
             if original_line != expected:
                 raise ValueError(
@@ -330,11 +345,12 @@ def import_scenario_split_command(dump_dir: Path, scenario_dir: Path) -> dict:
                 row["text"] = translated_line
                 changed += 1
             updated_idxs.add(idx)
-        file_reports.append({"file": str(path), "pairs": len(parsed_pairs), "changed": changed, "ignored_split_markers": ignored_split_markers[:20]})
+        legacy_tag_rows += file_legacy_tag_rows
+        file_reports.append({"file": str(path), "pairs": len(parsed_pairs), "changed": changed, "legacy_tag_rows": file_legacy_tag_rows, "ignored_split_markers": ignored_split_markers[:20]})
     backup_path = dump_dir / "text_entries.jsonl.bak"
     if not backup_path.exists():
         backup_path.write_bytes((dump_dir / "text_entries.jsonl").read_bytes())
     jsonl_dump(dump_dir / "text_entries.jsonl", text_rows)
-    report = {"scenario_dir": str(scenario_dir), "files": len(file_reports), "updated_idxs": len(updated_idxs), "file_reports": file_reports[:50]}
+    report = {"scenario_dir": str(scenario_dir), "files": len(file_reports), "updated_idxs": len(updated_idxs), "legacy_tag_rows": legacy_tag_rows, "file_reports": file_reports[:50]}
     json_dump(dump_dir / "import_scenario_report.json", report)
     return report

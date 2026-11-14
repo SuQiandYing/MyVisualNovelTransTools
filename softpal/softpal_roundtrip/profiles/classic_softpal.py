@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Sequence
 
+from ..core.message_layouts import MESSAGE_ARGUMENT_ROLES
 from ..core.models import MessageEvent, NameTextContext, ScenarioBoundary, TextClassificationContext, TextEntry
 from ..core.profiles import AbstractGameProfile
 
@@ -30,12 +31,9 @@ NAME_DISALLOWED_CHARS = frozenset("<>[]{}()（）「」『』【】《》。、�
 class ClassicSoftPalProfile(AbstractGameProfile):
     name = "classic-softpal"
 
-    # SCRIPT.SRC: all 1,150 text calls use these four argument slots.
-    # See vm_analysis.md; a line/flag value can also equal a TEXT.DAT offset.
-    _message_argument_roles = {
-        0x00020002: ("flags", "text", "name", "line"),
-        0x0002000F: ("flags", "text", "name", "line"),
-    }
+    # A numeric flag or line value can also equal a TEXT.DAT offset.
+    # The shared layouts include both four- and three-argument messages.
+    _message_argument_roles = MESSAGE_ARGUMENT_ROLES
 
     _message_call_ids = {
         0x00020002,
@@ -447,12 +445,16 @@ class ClassicSoftPalProfile(AbstractGameProfile):
             if call_i is None:
                 continue
 
+            call_id = words[call_i + 1]
+            roles = self._message_argument_roles.get(call_id)
+            known_layout = roles is not None and set(params) == set(range(len(roles)))
+            line_ordinal = roles.index("line") if known_layout else 3
             text_entry, name_entry = self._resolve_message_entries(
                 params,
                 text_map,
-                call_id=words[call_i + 1],
+                call_id=call_id,
                 call_offset=call_i * 4,
-                ignored_ordinals=(3,),
+                ignored_ordinals=(line_ordinal,),
             )
             if text_entry is None:
                 continue
@@ -462,13 +464,16 @@ class ClassicSoftPalProfile(AbstractGameProfile):
             used_offsets = {text_entry.entry_offset}
             if name_entry:
                 used_offsets.add(name_entry.entry_offset)
-            extra_param_values = tuple(params[p] for p in sorted(params) if params[p] not in used_offsets and p != 3)
+            if known_layout:
+                extra_param_values = tuple(params[p] for p, role in enumerate(roles) if role not in {"text", "name", "line"})
+            else:
+                extra_param_values = tuple(params[p] for p in sorted(params) if params[p] not in used_offsets and p != line_ordinal)
             
             events.append(
                 MessageEvent(
                     call_offset=call_i * 4,
-                    call_id=words[call_i + 1],
-                    line_id=params.get(3, 0),
+                    call_id=call_id,
+                    line_id=params.get(line_ordinal, 0),
                     flags=extra_param_values,
                     text_offset=text_entry.entry_offset,
                     text_idx=text_entry.idx,

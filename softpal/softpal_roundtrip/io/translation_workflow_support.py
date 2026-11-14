@@ -83,12 +83,18 @@ def looks_like_choice_text(text: str) -> bool:
 
 
 def annotate_scenario_export_tags(text_rows: list[dict], message_rows: list[dict]) -> list[dict]:
-    del message_rows
     rows = [dict(row) for row in text_rows]
+    for row in rows:
+        row.pop("scenario_export_tag", None)
+        row.pop("legacy_scenario_export_tag", None)
     ranges = scenario_body_ranges(rows)
     if not ranges:
         return rows
 
+    text_idxs = {int(row["text_idx"]) for row in message_rows}
+    name_idxs = {int(row["name_idx"]) for row in message_rows if row.get("name_idx") is not None}
+    # Reproduce the previous tags only for importing existing translation files.
+    # Adjacency and text shape must never promote internal rows in new exports.
     speaker_names = collect_scenario_speaker_names(rows, ranges)
     for body_range in ranges:
         for position in body_range:
@@ -99,10 +105,16 @@ def annotate_scenario_export_tags(text_rows: list[dict], message_rows: list[dict
 
             original_text = str(row.get("original_text", ""))
             if looks_like_speaker_name_text(original_text) and original_text.strip() in speaker_names:
-                row["scenario_export_tag"] = "name"
+                row["legacy_scenario_export_tag"] = "name"
             elif looks_like_choice_text(original_text):
-                row["scenario_export_tag"] = "choice"
+                row["legacy_scenario_export_tag"] = "choice"
             else:
+                row["legacy_scenario_export_tag"] = MESSAGE_TAG
+
+            idx = int(row["idx"])
+            if idx in name_idxs:
+                row["scenario_export_tag"] = "name"
+            elif idx in text_idxs:
                 row["scenario_export_tag"] = MESSAGE_TAG
     return rows
 
@@ -137,6 +149,13 @@ def first_message_context_map(message_rows: list[dict]) -> dict[int, dict]:
 
 def export_tag_for_row(row: dict) -> str:
     return normalize_translation_tag(str(row.get("scenario_export_tag", row["export_tag"])))
+
+
+def translation_tag_matches_row(tag: str, row: dict) -> bool:
+    if tag == export_tag_for_row(row):
+        return True
+    legacy_tag = row.get("legacy_scenario_export_tag")
+    return legacy_tag is not None and tag == normalize_translation_tag(str(legacy_tag))
 
 
 def build_translate_blocks(text_rows: list[dict], message_rows: list[dict]) -> list[str]:

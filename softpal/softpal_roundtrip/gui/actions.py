@@ -251,6 +251,8 @@ class GuiActionsMixin:
             message = f"译文已导出：{payload['rows']:,} 条，编码 {payload['file_encoding']}。"
         elif label == "export_scenarios":
             message = f"分场景导出完成：{payload['files_written']:,} 个文件。"
+            if payload.get("excluded_internal_rows"):
+                message += f" 已略过 {payload['excluded_internal_rows']:,} 条内部文本。"
         elif label == "import":
             message = f"译文已导入：{payload['imported_rows']:,} 条，其中 {payload['changed_rows']:,} 条与原文不同。"
         elif label == "import_scenarios":
@@ -270,4 +272,6 @@ class GuiActionsMixin:
             )
         else:
             message = f"{label} 完成。"
+        if label in {"import", "import_scenarios"} and payload.get("legacy_tag_rows"):
+            message += f" 已兼容 {payload['legacy_tag_rows']:,} 条旧版导出标签。"
         self._log(message)
