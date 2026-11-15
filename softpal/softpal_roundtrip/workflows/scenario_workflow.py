@@ -3,7 +3,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ..io.compat_text import TRANSLATE_TAG_RE, preview_text_for_error, read_text_auto
+from ..io.compat_text import (
+    TRANSLATE_TAG_RE, escape_text_field, preview_text_for_error, read_text_auto,
+    rows_need_text_escaping, text_escape_mode_from_lines, text_needs_escaping, unescape_text_field,
+)
 from ..io.json_io import json_dump, jsonl_dump, load_jsonl
 from ..io.translation_workflow_support import (
     annotate_scenario_export_tags,
@@ -45,6 +48,8 @@ def looks_like_choice_compat_text(text: str, call_id_set: set[int]) -> bool:
 
 
 def scenario_filename(text: str) -> str:
+    if text_needs_escaping(text):
+        text = escape_text_field(text, escaped_text=True)
     base = text.strip()
     base = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", base)
     base = re.sub(r"\s+", " ", base).strip().rstrip(".")
@@ -149,6 +154,8 @@ def is_choice_like_ui_row(row: dict) -> bool:
 
 
 def classify_scenario_role(row: dict) -> tuple[str | None, str | None]:
+    if "scenario_boundary_verified" in row:
+        return ("scenario_boundary", "opcode:0x000F0002") if row["scenario_boundary_verified"] is True else (None, None)
     text = str(row.get("original_text", "")).strip()
     tag = export_tag_for_row(row)
     call_ids_hex = row_call_id_hex_set(row)
@@ -197,6 +204,14 @@ def build_grouped_choice_boundaries(ordered_rows: list[dict]) -> list[dict]:
 
 
 def select_split_boundaries(ordered_rows: list[dict], message_rows: list[dict]) -> tuple[list[dict], list[str], bool]:
+    verified = [{
+        "name": str(row["original_text"]).strip(), "start_idx": int(row["idx"]),
+        "tag": export_tag_for_row(row), "verified": True,
+    } for row in ordered_rows if row.get("scenario_boundary_verified") is True]
+    if verified:
+        # Actual native argument sites define the boundaries. Empty scenes,
+        # adjacent scene titles and nonnumeric titles remain separate files.
+        return verified, sorted({item["tag"] for item in verified}), False
     opcode_primary, opcode_tags = classify_primary_boundary_candidates(ordered_rows)
     filtered_opcode_primary = filter_fallback_boundaries(opcode_primary, message_rows)
     if filtered_opcode_primary:
@@ -253,7 +268,8 @@ def export_scenario_split_command(dump_dir: Path, out_dir: Path, *, file_encodin
         excluded_internal_rows += excluded_count
         filename = unique_split_filename(scenario_filename(str(scenario["name"])), used_names) + ".txt"
         path = out_dir / filename
-        lines = build_translation_header(range_start_idx, None if next_start_idx is None else next_start_idx - 1) + build_scenario_split_marker_lines(scenario) + build_translate_blocks(scenario_rows, message_rows)
+        escaped_text = rows_need_text_escaping(scenario_rows)
+        lines = build_translation_header(range_start_idx, None if next_start_idx is None else next_start_idx - 1, escaped_text=escaped_text) + build_scenario_split_marker_lines(scenario) + build_translate_blocks(scenario_rows, message_rows, escaped_text=escaped_text)
         path.write_text("\n".join(lines).rstrip() + "\n", encoding=file_encoding, newline="\n")
         files.append({
             "scenario": scenario["name"],
@@ -265,6 +281,7 @@ def export_scenario_split_command(dump_dir: Path, out_dir: Path, *, file_encodin
             "start_idx": range_start_idx,
             "boundary_idx": start_idx,
             "end_idx": None if next_start_idx is None else next_start_idx - 1,
+            "text_escape_version": 1 if escaped_text else None,
         })
     report = {
         "out_dir": str(out_dir),
@@ -291,6 +308,7 @@ def import_scenario_split_command(dump_dir: Path, scenario_dir: Path) -> dict:
     legacy_tag_rows = 0
     for path in sorted(scenario_dir.glob("*.txt")):
         lines = read_text_auto(path).splitlines()
+        escaped_text = text_escape_mode_from_lines(lines)
         parsed_pairs: list[tuple[int, str, str, str]] = []
         ignored_split_markers: list[str] = []
         i = 0
@@ -322,7 +340,11 @@ def import_scenario_split_command(dump_dir: Path, scenario_dir: Path) -> dict:
             tag2 = normalize_translation_tag(m2.group("tag"))
             if tag1 != tag2:
                 raise ValueError(f"{path} 第{i + 1}-{i + 2}行标签不一致：{tag1!r} != {tag2!r}")
-            parsed_pairs.append((idx1, tag1, m1.group("text"), m2.group("text")))
+            parsed_pairs.append((
+                idx1, tag1,
+                unescape_text_field(m1.group("text"), escaped_text=escaped_text, context=f"{path.name} idx={idx1} 原文"),
+                unescape_text_field(m2.group("text"), escaped_text=escaped_text, context=f"{path.name} idx={idx1} 译文"),
+            ))
             i += 2
         changed = 0
         file_legacy_tag_rows = 0

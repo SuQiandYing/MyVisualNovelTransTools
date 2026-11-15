@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Sequence
 
-from ..core.message_layouts import MESSAGE_ARGUMENT_ROLES
+from ..core.message_layouts import MESSAGE_ARGUMENT_ROLES, validate_message_fields
 from ..core.models import MessageEvent, NameTextContext, ScenarioBoundary, TextClassificationContext, TextEntry
 from ..core.profiles import AbstractGameProfile
 
@@ -328,6 +328,11 @@ class ClassicSoftPalProfile(AbstractGameProfile):
                 None
                 if name_offset == self.get_no_name_sentinel()
                 else text_map.get(name_offset)
+            )
+            validate_message_fields(
+                text_entry.original_text,
+                None if name_entry is None else name_entry.original_text,
+                context=f"call=0x{call_offset:08X} id=0x{call_id:08X} 正文 idx={text_entry.idx} 人名 idx={None if name_entry is None else name_entry.idx}",
             )
             return text_entry, name_entry
 

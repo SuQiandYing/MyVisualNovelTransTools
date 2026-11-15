@@ -6,11 +6,13 @@ from typing import Any, Iterable
 
 
 def json_dump(path: Path, payload: object) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # surrogateescape preserves undecodable source bytes in memory. JSON's
+    # Unicode escapes preserve those values without producing invalid UTF-8.
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8", errors="backslashreplace")
 
 
 def jsonl_dump(path: Path, rows: Iterable[dict[str, Any]]) -> None:
-    with path.open("w", encoding="utf-8", newline="\n") as handle:
+    with path.open("w", encoding="utf-8", errors="backslashreplace", newline="\n") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False))
             handle.write("\n")

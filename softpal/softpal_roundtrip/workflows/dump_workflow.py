@@ -4,12 +4,17 @@ from pathlib import Path
 from typing import Iterable
 
 from ..binary.primitives import sha256_hex
+from ..core.errors import MessageLayoutError
 from ..core.models import DumpArtifacts, MessageEvent, TextClassificationContext, TextEntry
 from ..core.profiles import AbstractGameProfile
 from ..engine.script_parser import ParsedScript
 from ..engine.text_dat_parser import load_text_dat_auto
+from ..engine.text_references import find_text_reference_sites
 from ..io.json_io import json_dump, jsonl_dump
+from ..io.compat_text import text_has_raw_bytes
 from .scenario_workflow import classify_scenario_role
+from .rebuild_workflow import _commit_outputs
+from .source_recovery import recover_pasted_source
 
 
 def build_text_offset_map(entries: Iterable[TextEntry]) -> dict[int, TextEntry]:
@@ -51,6 +56,8 @@ def build_text_entry_rows(
     choice_offsets: set[int],
     label_offsets: set[int],
     direct_call_ids: dict[int, list[int]],
+    *,
+    verified_scenario_offsets: set[int] | None = None,
 ) -> list[dict[str, object]]:
     text_roles: dict[int, set[str]] = {entry.entry_offset: set() for entry in entries}
     text_event_count: dict[int, int] = {entry.entry_offset: 0 for entry in entries}
@@ -90,6 +97,10 @@ def build_text_entry_rows(
             paired_texts=tuple(paired_texts[entry.entry_offset]),
         )
         export_tag = profile.classify_entry_tag(context)
+        boundary_tag = export_tag
+        verified_boundary = entry.entry_offset in (verified_scenario_offsets or ())
+        if verified_boundary:
+            export_tag = "scenario"
         scenario_role, boundary_source = classify_scenario_role(
             {
                 "idx": entry.idx,
@@ -97,6 +108,7 @@ def build_text_entry_rows(
                 "export_tag": export_tag,
                 "direct_call_ids": call_ids,
                 "direct_call_ids_hex": [f"0x{value:08X}" for value in call_ids],
+                "scenario_boundary_verified": verified_boundary,
             }
         )
         rows.append(
@@ -118,10 +130,13 @@ def build_text_entry_rows(
                 "direct_call_ids_hex": [f"0x{value:08X}" for value in call_ids],
                 "scenario_role": scenario_role,
                 "scenario_boundary_source": boundary_source,
+                "scenario_boundary_verified": verified_boundary,
                 "message_text_count": text_event_count[entry.entry_offset],
                 "speaker_name_count": name_event_count[entry.entry_offset],
             }
         )
+        if verified_boundary:
+            rows[-1]["source_boundary_tag"] = boundary_tag
     return rows
 
 
@@ -132,6 +147,7 @@ def dump_command(
     *,
     profile: AbstractGameProfile,
     text_codec: str | None = None,
+    reference_pac: Path | None = None,
 ) -> DumpArtifacts:
     out_dir.mkdir(parents=True, exist_ok=True)
     script_data = script_path.read_bytes()
@@ -146,11 +162,31 @@ def dump_command(
     )
     entries = list(archive.entries)
     text_map = build_text_offset_map(entries)
+    recovered = None
+    try:
+        events = profile.extract_message_events(script, text_map)
+    except MessageLayoutError as error:
+        try:
+            recovered = recover_pasted_source(
+                script_path, text_path, script, archive, profile,
+                text_codec=text_codec or profile.get_text_codec(), reference_pac=reference_pac,
+            )
+        except (ValueError, OSError) as recovery_error:
+            raise MessageLayoutError(f"{error}\n恢复未完成：{recovery_error}") from recovery_error
+        script_data = recovered.script_data
+        script = ParsedScript.from_bytes(script_data, instruction_set=profile.get_instruction_set())
+        archive = recovered.archive
+        entries = list(archive.entries)
+        text_map = build_text_offset_map(entries)
+        events = profile.extract_message_events(script, text_map)
     refs = script.build_reference_map(text_map)
-    events = profile.extract_message_events(script, text_map)
     choice_offsets = profile.detect_choice_text_offsets(script, text_map)
     label_offsets = profile.detect_label_text_offsets(script, text_map)
     direct_call_ids = script.build_direct_call_id_map(refs)
+    verified_scenario_offsets = {
+        site.entry_offset for site in find_text_reference_sites(script, entries)
+        if site.call_id == 0x000F0002
+    } if profile.name == "classic-softpal" else set()
 
     text_rows = build_text_entry_rows(
         profile,
@@ -160,6 +196,7 @@ def dump_command(
         choice_offsets,
         label_offsets,
         direct_call_ids,
+        verified_scenario_offsets=verified_scenario_offsets,
     )
     message_rows = build_message_rows(events)
     script_rows = script.to_rows(text_map)
@@ -168,8 +205,10 @@ def dump_command(
     for row in text_rows:
         tag = str(row["export_tag"])
         tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    decode_issue_idxs = [entry.idx for entry in entries if text_has_raw_bytes(entry.original_text)]
 
     manifest = {
+        "profile": profile.name,
         "script_name": script_path.name,
         "text_name": text_path.name,
         "script_size": len(script_data),
@@ -179,6 +218,8 @@ def dump_command(
         "text_header_hex": archive.header.hex(),
         "text_trailer_hex": archive.trailer.hex(),
         "text_codec": text_codec or profile.get_text_codec(),
+        "text_decode_issue_count": len(decode_issue_idxs),
+        "text_decode_issue_idx_sample": decode_issue_idxs[:20],
         "text_entry_count": len(entries),
         "script_word_count": len(script.words),
         "message_event_count": len(events),
@@ -199,6 +240,15 @@ def dump_command(
         ],
     }
 
+    if decode_issue_idxs:
+        manifest["notes"].append(f"有 {len(decode_issue_idxs)} 条记录含当前编码无法解码的字节；JSON 保留原字节，双行导出使用明确的字节转义。")
+
+    if recovered is not None:
+        _commit_outputs(out_dir / "source_recovered", {
+            "SCRIPT.SRC": recovered.script_data, "TEXT.DAT": recovered.text_file_data,
+        })
+        manifest["source_recovery"] = recovered.report
+        manifest["notes"].append("输入记录曾被合并并错位；已从原包核对并生成恢复副本，原始输入未覆盖。")
     json_dump(out_dir / "manifest.json", manifest)
     jsonl_dump(out_dir / "text_entries.jsonl", text_rows)
     jsonl_dump(out_dir / "messages.jsonl", message_rows)

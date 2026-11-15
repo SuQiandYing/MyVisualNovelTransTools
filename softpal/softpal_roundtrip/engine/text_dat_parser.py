@@ -51,15 +51,24 @@ def load_text_dat_auto(
     *,
     text_codec: str | None = None,
 ) -> TextDatArchive:
+    return load_text_dat_bytes_auto(path.read_bytes(), profile, source_name=str(path), text_codec=text_codec)
+
+
+def load_text_dat_bytes_auto(
+    raw_data: bytes,
+    profile: AbstractGameProfile,
+    *,
+    source_name: str,
+    text_codec: str | None = None,
+) -> TextDatArchive:
     codec = text_codec or profile.get_text_codec()
-    raw_data = path.read_bytes()
     parse_errors: list[str] = []
     header_size = profile.get_text_header_size()
 
     try:
         header, entries, trailer = parse_text_dat_bytes(
             raw_data,
-            str(path),
+            source_name,
             text_codec=codec,
             header_size=header_size,
         )
@@ -80,7 +89,7 @@ def load_text_dat_auto(
             decrypted = softpal_decrypt_bytes(raw_data, cipher)
             header, entries, trailer = parse_text_dat_bytes(
                 decrypted,
-                f"{path} (decrypted)",
+                f"{source_name} (decrypted)",
                 text_codec=codec,
                 header_size=header_size,
             )
@@ -96,4 +105,4 @@ def load_text_dat_auto(
             parse_errors.append(f"encrypted: {exc}")
 
     details = " | ".join(parse_errors) or "no parser variants were attempted"
-    raise ValueError(f"failed to parse TEXT.DAT from {path}: {details}")
+    raise ValueError(f"failed to parse TEXT.DAT from {source_name}: {details}")

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 
-from .compat_text import ORIGINAL_MARK, TRANSLATE_MARK
+from ..core.message_layouts import validate_message_fields
+from .compat_text import ORIGINAL_MARK, TEXT_ESCAPE_MARKER, TRANSLATE_MARK, escape_text_field
 
 
 MESSAGE_TAG = "msg"
@@ -45,6 +46,8 @@ def looks_like_speaker_name_text(text: str) -> bool:
 
 
 def is_scenario_boundary_row(row: dict) -> bool:
+    if "scenario_boundary_verified" in row:
+        return row["scenario_boundary_verified"] is True
     scenario_role = str(row.get("scenario_role") or "")
     if scenario_role.startswith("scenario_boundary"):
         return True
@@ -83,6 +86,7 @@ def looks_like_choice_text(text: str) -> bool:
 
 
 def annotate_scenario_export_tags(text_rows: list[dict], message_rows: list[dict]) -> list[dict]:
+    validate_message_rows(message_rows)
     rows = [dict(row) for row in text_rows]
     for row in rows:
         row.pop("scenario_export_tag", None)
@@ -154,11 +158,13 @@ def export_tag_for_row(row: dict) -> str:
 def translation_tag_matches_row(tag: str, row: dict) -> bool:
     if tag == export_tag_for_row(row):
         return True
+    if row.get("scenario_boundary_verified") is True and tag == normalize_translation_tag(str(row.get("source_boundary_tag", ""))):
+        return True
     legacy_tag = row.get("legacy_scenario_export_tag")
     return legacy_tag is not None and tag == normalize_translation_tag(str(legacy_tag))
 
 
-def build_translate_blocks(text_rows: list[dict], message_rows: list[dict]) -> list[str]:
+def build_translate_blocks(text_rows: list[dict], message_rows: list[dict], *, escaped_text: bool = False) -> list[str]:
     ctx_map = first_message_context_map(message_rows)
     blocks: list[str] = []
     for row in text_rows:
@@ -182,15 +188,24 @@ def build_translate_blocks(text_rows: list[dict], message_rows: list[dict]) -> l
             comment_parts.append(f"call={ctx['call_offset_hex']}")
             comment_parts.append(f"line={ctx['line_id_hex']}")
             comment_parts.append("pair=NONE" if ctx["pair_idx"] is None else f"pair={ctx['pair_idx']}")
-        original_text = row["original_text"]
+        original_text = escape_text_field(row["original_text"], escaped_text=escaped_text)
         original_line = format_translation_line(ORIGINAL_MARK, idx, tag, original_text)
-        translated_line = format_translation_line(TRANSLATE_MARK, idx, tag, original_text)
+        translated_text = escape_text_field(row.get("text", row["original_text"]), escaped_text=escaped_text)
+        translated_line = format_translation_line(TRANSLATE_MARK, idx, tag, translated_text)
         blocks.append("\n".join(["# " + " ".join(comment_parts), original_line, translated_line, ""]))
     return blocks
 
 
-def build_translation_header(idx_start: int | None, idx_end: int | None) -> list[str]:
-    return [
+def validate_message_rows(message_rows: list[dict]) -> None:
+    for row in message_rows:
+        validate_message_fields(
+            str(row["text"]), None if row.get("name") is None else str(row["name"]),
+            context=f"call={row.get('call_offset_hex', '?')} 正文 idx={row['text_idx']} 人名 idx={row.get('name_idx')}",
+        )
+
+
+def build_translation_header(idx_start: int | None, idx_end: int | None, *, escaped_text: bool = False) -> list[str]:
+    header = [
         "# SOFTPAL_TRANSLATE_V1",
         "# Supplemental tags: `title`=作品标题, `chapter_title`=章节标题, `route_title`=路线/分支标题, `replay_title`=回想标题。",
         "# 规则：每组只改第二行；第一行保持原文作对照；不要改动 `○编号○标签○` / `●编号●标签●` 这一段。",
@@ -203,3 +218,9 @@ def build_translation_header(idx_start: int | None, idx_end: int | None) -> list
         "#",
         "",
     ]
+    if escaped_text:
+        header[1:1] = [
+            TEXT_ESCAPE_MARKER,
+            r"# 转义规则：\xNN 保留无法解码的原字节，\\ 表示字面反斜线，\n / \r / \t 表示换行、回车、制表符；保留此版本标记。",
+        ]
+    return header

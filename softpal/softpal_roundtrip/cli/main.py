@@ -40,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     dump_parser.add_argument("--script", default=Path("SCRIPT.SRC"), type=Path)
     dump_parser.add_argument("--text", default=Path("TEXT.DAT"), type=Path)
     dump_parser.add_argument("--out", default=Path("disasm_out"), type=Path)
+    dump_parser.add_argument("--reference-pac", type=Path, help="Original PAC used only to verify and recover a detected pasted display list")
     dump_parser.add_argument(
         "--text-codec",
         default=None,
@@ -126,6 +127,7 @@ def main() -> None:
             args.out,
             text_codec=args.text_codec,
             profile_name=args.profile,
+            reference_pac=args.reference_pac,
         )
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return

@@ -116,6 +116,17 @@ class GuiActionsMixin:
                 text_codec=self.text_codec.get(),
             )
             self._log(f"反汇编完成，共 {manifest.get('text_entry_count', 0)} 条文本。")
+            if manifest.get("text_decode_issue_count"):
+                self._log(f"有 {manifest['text_decode_issue_count']:,} 条文本含当前编码无法解码的字节；导出用 \\xNN 保留，未编辑时原样回封。")
+
+            recovery = manifest.get("source_recovery")
+            if recovery:
+                paths["script"] = Path(self.dump_dir.get()) / recovery["script_file"]
+                paths["text"] = Path(self.dump_dir.get()) / recovery["text_file"]
+                script_source, text_source = str(paths["script"]), str(paths["text"])
+                self.root.after(0, lambda: self.script_path.set(script_source))
+                self.root.after(0, lambda: self.text_path.set(text_source))
+                self._log(f"已恢复错位记录，保留 {recovery['preserved_edit_rows']:,} 条改文；后续使用恢复副本，原输入已保留。")
 
             try:
                 auto_idx, script_offset = core_v1.auto_find_anchor_idx(

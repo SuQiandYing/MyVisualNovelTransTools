@@ -9,6 +9,9 @@ from ..io.compat_text import (
     normalize_idx_range,
     preview_text_for_error,
     read_text_auto,
+    rows_need_text_escaping,
+    text_escape_mode_from_lines,
+    unescape_text_field,
 )
 from ..io.json_io import json_dump, jsonl_dump, load_jsonl
 from ..io.translation_workflow_support import (
@@ -34,8 +37,9 @@ def export_translation_command(
     message_rows = load_jsonl(dump_dir / "messages.jsonl")
     text_rows = annotate_scenario_export_tags(text_rows, message_rows)
     filtered_rows = filter_text_rows_by_idx(text_rows, idx_start, idx_end)
-    header = build_translation_header(idx_start, idx_end)
-    body = build_translate_blocks(filtered_rows, message_rows)
+    escaped_text = rows_need_text_escaping(filtered_rows)
+    header = build_translation_header(idx_start, idx_end, escaped_text=escaped_text)
+    body = build_translate_blocks(filtered_rows, message_rows, escaped_text=escaped_text)
     with out_path.open("w", encoding=file_encoding, newline="\r\n") as handle:
         handle.write("\n".join(header + body))
     return {
@@ -45,6 +49,7 @@ def export_translation_command(
         "idx_end": idx_end,
         "rows": len(filtered_rows),
         "total_rows": len(text_rows),
+        "text_escape_version": 1 if escaped_text else None,
     }
 
 
@@ -62,6 +67,7 @@ def import_translation_command(
     text_by_idx = {int(row["idx"]): row for row in text_rows}
     content = read_text_auto(in_path)
     lines = content.splitlines()
+    escaped_text = text_escape_mode_from_lines(lines)
     if idx_start is None and idx_end is None:
         idx_start, idx_end = detect_idx_range_from_lines(lines)
     idx_start, idx_end = normalize_idx_range(idx_start, idx_end)
@@ -92,7 +98,11 @@ def import_translation_command(
         tag2 = normalize_translation_tag(m2.group("tag"))
         if tag1 != tag2:
             raise ValueError(f"第{i + 1}-{i + 2}行标签不一致：{tag1!r} != {tag2!r}")
-        parsed_pairs.append((idx1, tag1, m1.group("text"), m2.group("text")))
+        parsed_pairs.append((
+            idx1, tag1,
+            unescape_text_field(m1.group("text"), escaped_text=escaped_text, context=f"idx={idx1} 原文"),
+            unescape_text_field(m2.group("text"), escaped_text=escaped_text, context=f"idx={idx1} 译文"),
+        ))
         i += 2
 
     seen: set[int] = set()

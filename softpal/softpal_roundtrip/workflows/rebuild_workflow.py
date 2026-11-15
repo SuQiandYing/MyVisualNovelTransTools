@@ -222,6 +222,20 @@ def _load_relocation_source(
     if profile.name != "classic-softpal":
         raise ValueError(f"尚未定义 {profile.name} 的安全文本重定位参数布局")
     codec = manifest.get("text_codec", "cp932")
+    recovery = manifest.get("source_recovery")
+    if recovery:
+        for kind, supplied_path in (("script", script_path), ("text", text_path)):
+            if supplied_path is None or sha256_hex(supplied_path.read_bytes()) != recovery.get(f"input_{kind}_sha256"):
+                continue
+            recovered_path = (dump_dir / recovery[f"{kind}_file"]).resolve()
+            if not recovered_path.is_relative_to(dump_dir.resolve()):
+                raise ValueError("恢复源文件不在当前 dump 目录内")
+            if sha256_hex(recovered_path.read_bytes()) != recovery[f"{kind}_sha256"]:
+                raise ValueError("恢复源文件的哈希已改变，请重新反汇编")
+            if kind == "script":
+                script_path = recovered_path
+            else:
+                text_path = recovered_path
     if script_path is not None:
         script_data = script_path.read_bytes()
     else:
@@ -355,6 +369,9 @@ def _rebuild_verified_references(
             raise ValueError("回封输出不能覆盖原始 SCRIPT.SRC/TEXT.DAT，请选择独立输出目录")
     if out_dir.resolve() == dump_dir.parent.resolve():
         raise ValueError("请将回封文件写入独立输出目录，保留源文件")
+    recovery = manifest.get("source_recovery")
+    if recovery and out_dir.resolve() == (dump_dir / recovery["script_file"]).resolve().parent:
+        raise ValueError("回封输出不能覆盖恢复源文件，请选择独立输出目录")
     text_data, old_to_new, changed_rows = rebuild_text_dat_with_relocations(manifest, rows, edited_encoding=edited_encoding)
     for row in rows:
         current = row.get("text", row["original_text"])

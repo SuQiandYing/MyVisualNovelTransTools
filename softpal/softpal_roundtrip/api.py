@@ -27,6 +27,7 @@ def dump_command(
     *,
     text_codec: str = "cp932",
     profile_name: str = "classic-softpal",
+    reference_pac: Path | None = None,
 ):
     profile = load_profile(profile_name)
     result = modular_dump_command(
@@ -35,6 +36,7 @@ def dump_command(
         out_dir,
         profile=profile,
         text_codec=text_codec,
+        reference_pac=reference_pac,
     )
     return result.manifest
 
